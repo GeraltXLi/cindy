@@ -1,4 +1,5 @@
 import { openSession } from '../localDb/sessionOpening.js';
+import { approvedTaskDelegation, assertTaskActionCurrent } from './taskActionAuthorization.js';
 import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
 import { existsSync, statSync } from 'node:fs';
@@ -2407,6 +2408,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const { source: taskSource, ...sessionBody } = input.session;
     try {
       await input.caller.groupAuthority?.refresh();
+      await assertTaskActionCurrent();
       await openSession({ id: childSessionId, now: createdAt, source: taskSource,
         body: { ...sessionBody, workspaceKind: input.session.workspaceKind ?? 'dialogue' },
         finalize: () => {
@@ -2441,6 +2443,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           };
 
           permissionSnapshotJson = JSON.stringify({ ...plan,
+            ...(approvedTaskDelegation(input.callerSessionId) ? { taskActionAuthority: approvedTaskDelegation(input.callerSessionId) } : {}),
             ...(input.caller.role === 'group' ? { groupOriginRoute: input.caller.routeKey, groupOriginSessionId: input.callerSessionId } : {}),
             ...(input.taskModelOverride ? { taskModelOverride: input.taskModelOverride } : {}),
             taskInput: { runSequence: 1, originalObjective: input.objective, followUp: null } satisfies SessionTaskInputSnapshot,

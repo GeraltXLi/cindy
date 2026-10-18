@@ -16,7 +16,8 @@ const accepted = {
   targetLastUserSendAt: null,
 };
 function setup(outcome: unknown = { ok: true, result: accepted }) {
-  const invoke = vi.fn(async (): Promise<InvokeResultPayload> => {
+  const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+    if ((args[0] as { action?: string }).action === 'task-action-capability') return { ok: true, result: { taskActionVersion: 1 } };
     if (outcome instanceof Error) throw outcome;
     return outcome as InvokeResultPayload;
   });
@@ -38,11 +39,11 @@ describe('cross-device send_to_session sender', () => {
     expect(resolveRemoteInvokeTimeoutMs(DL_SESSION_HANDOFF_CHANNEL)).toBe(65_000);
     const s = setup();
     expect(await s.send()).toEqual(accepted);
-    expect(s.invoke).toHaveBeenCalledOnce();
+    expect(s.invoke).toHaveBeenCalledTimes(2);
     expect(s.invoke).toHaveBeenCalledWith(
       'mbp',
       DL_SESSION_HANDOFF_CHANNEL,
-      [{ sessionId: 's9', message: 'hi', sender: { sessionId: 'me', title: 'T' } }],
+      [{ sessionId: 's9', message: 'hi', sender: { sessionId: 'me', title: 'T' }, taskActionReceipt: expect.any(String) }],
       { preSend: expect.any(Function) },
     );
   });
@@ -112,7 +113,7 @@ describe('cross-device send_to_session sender', () => {
       const s = setup(outcome);
       expect(await s.send()).toMatchObject({ ok: false, errorCode });
       // 任何失败都不自动重发。
-      expect(s.invoke).toHaveBeenCalledOnce();
+      expect(s.invoke).toHaveBeenCalledTimes(2);
     }
   });
 
@@ -157,7 +158,8 @@ describe('cross-device send_to_session sender', () => {
     expect(early).toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
     expect(beforeSend).not.toHaveBeenCalled();
     // 发出后、回执前切换账号：结果未知，且不返回上一个账号的任务信息。
-    const inFlight = vi.fn(async (): Promise<InvokeResultPayload> => {
+    const inFlight = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+      if ((args[0] as { action?: string }).action === 'task-action-capability') return { ok: true, result: { taskActionVersion: 1 } };
       owner += 1;
       return { ok: true, result: { ...accepted, targetTitle: 'old account task' } };
     });

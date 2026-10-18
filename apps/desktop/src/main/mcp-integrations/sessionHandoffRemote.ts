@@ -3,6 +3,7 @@ import {
   DL_SESSION_HANDOFF_CHANNEL,
   type InvokeResultPayload,
 } from '@cindy/device-link';
+import { issueRemoteTaskActionReceipt, releaseRemoteTaskActionReceipt } from '../maker-ipc/remoteTaskActionReceipt.js';
 
 /**
  * send_to_session 的跨电脑发送端：把消息交给目标电脑，由它用本机 send_to_session 的
@@ -18,6 +19,7 @@ export interface RemoteSessionHandoffRequest {
   sessionId: string;
   message: string;
   sender: { sessionId: string; title?: string };
+  taskActionReceipt?: string;
 }
 
 export type RemoteSessionHandoffResult =
@@ -148,14 +150,25 @@ export function createRemoteSessionHandoff(deps: {
     }
     let response: InvokeResultPayload;
     try {
+      // Old Hosts cannot recheck queued authority. Probe before sending any content.
+      const support = await deps.invoke(target.deviceId, DL_SESSION_HANDOFF_CHANNEL,
+        [{ action: 'task-action-capability', sessionId: target.sessionId }], { preSend: assertCurrent });
+      if (!support.ok || (support.result as { taskActionVersion?: unknown } | null)?.taskActionVersion !== 1)
+        return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'The other computer must support task-action authorization before a message can be sent.' };
+      assertCurrent();
+      const taskActionReceipt = issueRemoteTaskActionReceipt({ ...target, senderSessionId: sender.sessionId, message: request.message }, assertCurrent);
       const wire: RemoteSessionHandoffRequest = {
         sessionId: target.sessionId,
         message: request.message,
         sender,
+        taskActionReceipt,
       };
       response = await deps.invoke(target.deviceId, DL_SESSION_HANDOFF_CHANNEL, [wire], {
         preSend: assertCurrent,
       });
+      // Failed/unknown deliveries keep the receipt until expiry; never blindly retry.
+      if (response.ok && (response.result as { ok?: boolean; wakeKind?: string } | null)?.ok === true
+        && (response.result as { wakeKind?: string }).wakeKind !== 'queued') releaseRemoteTaskActionReceipt(taskActionReceipt);
     } catch (error) {
       // inFlight = 请求帧已发出、只是回执丢了：对端可能已执行，不能报「没有发出」。
       if (error instanceof DeviceLinkError) {

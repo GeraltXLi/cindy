@@ -96,6 +96,12 @@ let startupAbort: AbortController | undefined;
 let stopping: Promise<void> | undefined;
 let generation = 0;
 
+/** Read-only authorization check: never starts an engine or creates/enables a rule. */
+export function readActiveFollowUpRoutine(botId: string): Pick<Routine, 'enabled' | 'revision'> | null {
+  if (!current || isAppSessionBoundaryPending() || current.scope !== activeOwnerScopeKey()) return null;
+  return current.engine.list(botId).find(row => row.builtin === 'follow-up') ?? null;
+}
+
 function assertScope(scope: string): void {
   if (
     !getActiveAppSession().dataOwnerId ||

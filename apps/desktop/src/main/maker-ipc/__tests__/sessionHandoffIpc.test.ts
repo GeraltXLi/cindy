@@ -33,15 +33,33 @@ function setup(
   },
 ) {
   const send = vi.fn<Parameters<typeof createSessionHandoffHandler>[0]['send']>(async () => result);
-  return { send, handle: createSessionHandoffHandler({ send }) };
+  return { send, handle: createSessionHandoffHandler({ send, validate: async () => true }) };
 }
 const request = {
+  taskActionReceipt: 'receipt-one',
   sessionId: 'local-task',
   message: 'hello',
   sender: { sessionId: 'sender-1', title: 'PR 跟进' },
 };
 
 describe('maker:session:handoff (receiving computer)', () => {
+  // Unit regression: a transport replay or revocation while busy must not dispatch.
+  it('rejects old senders, consumes a receipt once and rechecks at delayed dispatch', async () => {
+    let current = true;
+    const send = vi.fn(async () => ({ ok: true as const, agentKind: 'codex', wakeKind: 'queued' as const,
+      targetTitle: null, targetLastUserSendAt: null }));
+    const handle = createSessionHandoffHandler({ send, validate: async () => current });
+    expect(await handle('device-A', { ...request, taskActionReceipt: undefined })).toMatchObject({ ok: false });
+    expect(send).not.toHaveBeenCalled();
+    expect(await handle('device-A', request)).toMatchObject({ ok: true });
+    expect(await handle('device-A', request)).toMatchObject({ ok: false });
+    expect(send).toHaveBeenCalledOnce();
+    const params = send.mock.calls[0] as unknown as [import('../sessionHandoffIpc.js').SessionHandoffSendParams];
+    await expect(params[0].taskActionDeliveryGuard!()).resolves.toBeUndefined();
+    current = false;
+    await expect(params[0].taskActionDeliveryGuard!()).rejects.toThrow('AUTHORIZATION_EXPIRED');
+  });
+
   it('delivers to the existing task through the local path, stamped with the authenticated device', async () => {
     const s = setup();
     expect(await s.handle('device-A', request)).toEqual({
@@ -52,6 +70,7 @@ describe('maker:session:handoff (receiving computer)', () => {
       targetLastUserSendAt: null,
     });
     expect(s.send).toHaveBeenCalledWith({
+      clientId: 'remote-task-action:receipt-one', forceQueue: true, taskActionDeliveryGuard: expect.any(Function),
       targetSessionId: 'local-task',
       message: 'hello',
       origin: {
@@ -123,7 +142,7 @@ describe('maker:session:handoff (receiving computer)', () => {
       targetTitle: null,
       targetLastUserSendAt: null,
     }));
-    registerSessionHandoffIpc({ send });
+    registerSessionHandoffIpc({ send, validate: async () => true });
     const handler = handlers.get(DL_SESSION_HANDOFF_CHANNEL)!;
     const within = (context: Partial<DeviceLinkInvokeContext>) =>
       runDeviceLinkInvokeContext(context as DeviceLinkInvokeContext, () => handler({}, request));
